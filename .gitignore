@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Environment Variables (Tuyệt đối không commit file .env thật)
+.env
+
+# Database / Local storage
+*.sqlite3
+data/medical_docs/*.pdf
+
+# IDE
+.vscode/
+.idea/
