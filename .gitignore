@@ -10,7 +10,7 @@ venv/
 
 # Database / Local storage
 *.sqlite3
-data/medical_docs/*.pdf
+data/raw_pdfs/*.pdf
 
 # IDE
 .vscode/

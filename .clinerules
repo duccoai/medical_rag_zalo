@@ -1,0 +1,38 @@
+# CLINULES — MEDICAL-RAG-ZALO PROJECT RULES
+
+## 1. PROJECT OVERVIEW & ARCHITECTURE
+- **Project Name**: `medical-rag-zalo` (Trợ lý Y tế & Thường thức Sức khỏe tích hợp Zalo OA).
+- **Architecture**: Clean Layered Architecture (Phân tầng sạch):
+  - `app/core/`: Cấu hình hệ thống (Pydantic Settings), hằng số, logging, bảo mật.
+  - `app/schemas/`: Pydantic v2 Schemas (Data Validation, API Contracts, LLM Output Guardrails).
+  - `app/services/`: Nghiệp vụ lõi (Document Ingestion, Vector Search pgvector, RAG Engine, Redis Caching, Zalo Client).
+  - `app/api/`: Router FastAPI (HTTP Endpoints, Webhook Zalo OA, Middlewares).
+- **Tech Stack**: Python 3.10+, FastAPI (Async), Pydantic v2, PostgreSQL + pgvector, Redis, Docker Compose, OpenAI/Gemini API.
+
+## 2. NON-NEGOTIABLE MEDICAL SAFETY RULES
+- **Medical Safety Guardrail**: Tất cả phản hồi y tế từ LLM BẮT BUỘC phải qua `MedicalResponseSchema` ép kiểu JSON.
+- **Mandatory Disclaimer**: Mọi câu trả lời BẮT BUỘC chứa câu cảnh báo miễn trừ trách nhiệm: *"Lưu ý: Thông tin chỉ mang tính chất tham khảo, không thay thế cho chỉ định của bác sĩ."*
+- **Urgency Flag**: Nếu phát hiện câu hỏi có triệu chứng khẩn cấp (co giật, khó thở, đau ngực cấp, bất tỉnh), thuộc tính `urgency_flag` phải bằng `True` và khuyến cáo đi cấp cứu ngay lập tức.
+- **Zero Hallucination**: LLM KHÔNG ĐƯỢC TỰ BỊA ĐẶT. Nếu dữ liệu tra cứu trong Vector DB không có, phải phản hồi lịch sự là chưa có thông tin trong Dược thư.
+
+## 3. CODING STANDARDS & CONVENTIONS
+- **Python Version**: Python 3.10+ (Sử dụng Type Hinting hiện đại: `int | str`, `list[str]`, `dict[str, Any]`).
+- **Asynchronous Code**: Dùng `async` / `await` cho tất cả I/O bound operations (FastAPI endpoints, Database queries, API calls, Redis calls).
+- **Pydantic v2 Standard**: 
+  - Khai báo Schema kế thừa `BaseModel`.
+  - Sử dụng `@field_validator` và `@model_validator` theo đúng cú pháp Pydantic v2.
+  - Sử dụng `SecretStr` cho các API Keys trong `app/core/config.py`.
+- **Error Handling**: Không bao giờ nuốt ngoại lệ (`except Exception: pass`). Bọc ngoại lệ bằng `HTTPException` hoặc Custom Exceptions rõ ràng.
+- **Code Style**: Tuân thủ PEP 8, đặt tên biến/hàm kiểu `snake_case`, tên Class kiểu `PascalCase`.
+
+## 4. DIRECTORY & FILE CREATION RULES
+- Khi tạo file mới, tuyệt đối tuân thủ đúng vị trí trong cây thư mục phân tầng:
+  - Dữ liệu Request/Response API \\(\rightarrow\\) `app/schemas/`
+  - Logic tính toán/RAG/Embedding \\(\rightarrow\\) `app/services/`
+  - Endpoint URL/Routing \\(\rightarrow\\) `app/api/`
+- Mỗi file module không nên vượt quá 200 dòng code. Chia nhỏ thành các sub-modules nếu quá dài.
+
+## 5. TEST & VERIFICATION COMMANDS
+- Chạy Unit Test: `pytest -v`
+- Chạy Server Dev: `uvicorn app.main:app --reload --port 8000`
+- Chạy Docker Staging: `docker-compose up --build -d`

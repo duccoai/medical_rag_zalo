@@ -1,0 +1,10 @@
+fastapi>=0.110.0 # framework chính để xây dựng các đường dẫn web api nhanh và hiện đại
+uvicorn[standard]>=0.28.0 # máy chủ web (ASGI server) chạy ứng dụng FastAPI của bạn lên mạng or local
+pydantic>=2.6.0 # tools kiểm tra tính hợp lệ của dữ liệu đầu vào và đầu ra
+pydantic-settings>=2.2.0 # hỗ trợ đọc thông sô cấu hình dữ liệu hệ thống từ .env an toàn
+openai>=1.14.0 # thư viện chính để gọi các mô hình OpenAI -> xử lý câu hỏi
+asyncpg>=0.29.0 # tools hỗ trợ lưu trữ và tìm kiếm dữ liệu dạng vector trong PostgreSQL
+pgvector>=0.2.5 
+redis>=5.0.0 #thư viện kết nối với hệ thống lưu trữ bộ nhớ đệm Redis, tăng tốc độ response or lưu repo chat
+python-dotenv>=1.0.1 # tải các biến bảo mật (như mã khóa API) từ file .env vào chương trình 
+pytest>=8.0.0 # tools để viết và chạy các bài test tự động
