@@ -8,3 +8,4 @@ pgvector>=0.2.5
 redis>=5.0.0 #thư viện kết nối với hệ thống lưu trữ bộ nhớ đệm Redis, tăng tốc độ response or lưu repo chat
 python-dotenv>=1.0.1 # tải các biến bảo mật (như mã khóa API) từ file .env vào chương trình 
 pytest>=8.0.0 # tools để viết và chạy các bài test tự động
+google-genai #(uv pip install google-genai)

@@ -26,3 +26,8 @@ class ChatResponse(BaseModel):
         default="Lưu ý: Thông tin chỉ mang tính tham khảo, không thay thế chỉ định của bác sĩ.",
         description="Cảnh báo y khoa bắt buộc",
     )
+    recommended_dosage: str | None = Field(default=None, description="Liều dùng khuyến nghị(nếu có)")
+    urgency_flag: bool = Field(default=False)
+    is_mock: bool = Field(default=False)
+
+    
