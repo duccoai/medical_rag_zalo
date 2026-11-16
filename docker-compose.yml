@@ -4,9 +4,9 @@ services:
     container_name: medical-rag-pos
     platform: linux/amd64
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: medicaloai1911
-      POSTGRES_DB: medical_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medicaloai11911}
+      POSTGRES_DB: ${POSTGRES_DB:-medical_db}
     ports:
       - "5432:5432"
     volumes:

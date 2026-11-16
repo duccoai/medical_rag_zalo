@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = 'development'
     
     # API Keys
-    OPENAI_API_KEY: SecretStr = Field(..., description="API Key cho LLM")
+    GEMINI_API_KEY: SecretStr = Field(..., description="API Key Google AI Studio cho Gemini (định dạng AQ.)")
     ZALO_APP_SECRET: SecretStr
     ZALO_OA_ACCESS_TOKEN: SecretStr
 

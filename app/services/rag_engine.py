@@ -1,12 +1,31 @@
+import logging
+import traceback
+
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
+
 from app.core.config import settings
 from app.core.exceptions import AppBaseException
 from app.schemas.medical import MedicalResponseSchema
 
+logger = logging.getLogger(__name__)
 
-# khởi tạo kết nối với OpenAI nhưng là bất đồng bộ (Async) -> tránh nghẽn server khi nhiều ng truy cập
-client = genai.Client(api_key=settings.OPENAI_API_KEY.get_secret_value())
+# Thời gian chờ tối đa cho mỗi request tới Gemini (đơn vị: mili giây).
+# Không có timeout thì socket bị treo sẽ khiến loading chờ vô hạn.
+LLM_TIMEOUT_MS = 60_000
+
+# Client Gemini (google-genai). Dùng client.aio để gọi bất đồng bộ, không block event loop của FastAPI
+client = genai.Client(
+    api_key=settings.GEMINI_API_KEY.get_secret_value(),
+    http_options=types.HttpOptions(timeout=LLM_TIMEOUT_MS),  # qly timeout 60s tránh bị treo kết nối socket vô hạn
+)
+
+LLM_MODEL = "gemini-3.5-flash"
+SYSTEM_INSTRUCTION = (
+    "Bạn là Trợ lý Y tế Thông minh. Chỉ sử dụng thông tin trong tài liệu Context được cung cấp để tư vấn.\n"
+    "Tuyệt đối không tự suy đoán hoặc bịa đặt liều dùng thuốc ngoài tài liệu. "
+    "Nếu Context không chứa thông tin liên quan đến câu hỏi, hãy lịch sự từ chối trả lời và khuyên người dùng hỏi bác sĩ."
+)
 
 EMERGENCY_KEYWORDS = [
     "tự tử", "uống thuốc trừ sâu", "uống thuốc sâu",
@@ -14,9 +33,9 @@ EMERGENCY_KEYWORDS = [
 ]
 
 
-# định nghĩa hàm chốt chặn lọc các từ khóa cấm từ (EMERGENCY_KEYWORDS) để trả cảnh báo lập tức mà ko cần tốn token gọi AI 
+# Lớp bảo vệ 1: lọc từ khóa cấp cứu để trả cảnh báo ngay, không tốn token gọi AI
 def check_input_guardrail(query: str) -> MedicalResponseSchema | None:
-    """Lớp bảo vệ 1: Chặn ngay các tình huống cấp cứu trước khi gọi LLM"""
+    """Chặn ngay các tình huống cấp cứu trước khi gọi LLM"""
     query_lower = query.lower()
     if any(keyword in query_lower for keyword in EMERGENCY_KEYWORDS):
         return MedicalResponseSchema(
@@ -27,16 +46,15 @@ def check_input_guardrail(query: str) -> MedicalResponseSchema | None:
         )
     return None
 
-# định nghĩa hàm điều phối chính (nơi gói data vào prompt được thiết kế chuẩn để AI nhận và trả về answer chuẩn cấu trúc và tránh hallucination)
+
+# Hàm điều phối chính: ghép context vào prompt và trả về câu trả lời đúng cấu trúc MedicalResponseSchema
 async def generate_medical_answer(
     query: str, retrieved_contexts: list[str]) -> MedicalResponseSchema:
-    
-    # 1. Kiểm tra Input Guardrail trước
+
     emergency_response = check_input_guardrail(query)
     if emergency_response:
         return emergency_response
 
-    # 2. Ghép ngữ cảnh y tế vào System Prompt
     context_str = "\n---\n".join(retrieved_contexts)
     full_prompt = (
         "Bạn là Trợ lý Y tế Thông minh. Chỉ sử dụng thông tin trong tài liệu Context được cung cấp để tư vấn.\n"
@@ -46,27 +64,42 @@ async def generate_medical_answer(
         f"Câu hỏi của người dùng: {query}"
     )
 
-    # 3. Gọi LLM bất đồng bộ và ép kiểu đầu ra theo MedicalResponseSchema
+    # Gọi Gemini với response_schema để ép đúng cấu trúc MedicalResponseSchema
     try:
-            # Sử dụng client.aio cho bất đồng bộ (async) để không block FastAPI
-            response = await client.aio.models.generate_content(
-                model="gemini-1.5-flash",  # Model tối ưu và mới nhất của Google
-                contents=full_prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": MedicalResponseSchema, # Ép đúng cấu trúc Pydantic
-                    "temperature": 0.1,  # Giảm tối đa ảo giác
-                },
-            )
-            
-            # SDK mới của Google trả về đối tượng đã được parse tự động vào parsed
-            parsed_result = response.parsed
-            if not parsed_result:
-                raise AppBaseException("Mô hình AI không trả về dữ liệu hợp lệ.", status_code=502)
-            return parsed_result
+        response = await client.aio.models.generate_content(
+            model=LLM_MODEL,
+            contents=full_prompt,
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": MedicalResponseSchema,
+                "temperature": 0.1,
+            },
+        )
+
+        # Ưu tiên response.parsed (đã được SDK map sang Pydantic), fallback sang parse JSON thô
+        if isinstance(response.parsed, MedicalResponseSchema):
+            return response.parsed
+        if not response.text:
+            raise ValueError("Gemini trả về nội dung rỗng (có thể bị chặn bởi safety filter)")
+        return MedicalResponseSchema.model_validate_json(response.text)
 
     except errors.APIError as e:
-            # Bắt lỗi từ Google API và đưa về chuẩn AppBaseException (502 Bad Gateway)
-            raise AppBaseException(
-                message=f"Lỗi kết nối dịch vụ Google AI: {str(e)}", status_code=502
-            )
+        # IN CHI TIẾT LỖI RA TERMINAL ĐỂ DEBUG
+        print(f"🔥 LỖI GOOGLE API CHI TIẾT: model={LLM_MODEL}, code={e.code}, status={e.status}, message={e.message}")
+        logger.error(
+            "Lỗi gọi Gemini API (model=%s, code=%s, status=%s): %s",
+            LLM_MODEL, e.code, e.status, e.message,
+        )
+        raise AppBaseException(
+            message="Dịch vụ tư vấn AI tạm thời không khả dụng, vui lòng thử lại sau.",
+            status_code=502,
+        ) from e
+    except Exception as ex:
+        # Bắt các lỗi khác: timeout/kết nối, lỗi parse JSON, lỗi validate Pydantic, lỗi thư viện
+        print(f"🔥 LỖI KHÔNG XÁC ĐỊNH (model={LLM_MODEL}): {type(ex).__name__}: {ex}")
+        print(traceback.format_exc())
+        logger.exception("Lỗi không xác định khi gọi Gemini (model=%s): %s", LLM_MODEL, ex)
+        raise AppBaseException(
+            message=f"Lỗi hệ thống: {type(ex).__name__}: {ex}",
+            status_code=502,
+        ) from ex
