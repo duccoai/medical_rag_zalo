@@ -56,10 +56,8 @@ async def generate_medical_answer(
         return emergency_response
 
     context_str = "\n---\n".join(retrieved_contexts)
+    # Chỉ ghép Context và câu hỏi; chỉ dẫn vai trò đã nằm trong SYSTEM_INSTRUCTION
     full_prompt = (
-        "Bạn là Trợ lý Y tế Thông minh. Chỉ sử dụng thông tin trong tài liệu Context được cung cấp để tư vấn.\n"
-        "Tuyệt đối không tự suy đoán hoặc bịa đặt liều dùng thuốc ngoài tài liệu. "
-        "Nếu Context không chứa thông tin liên quan đến câu hỏi, hãy lịch sự từ chối trả lời và khuyên người dùng hỏi bác sĩ.\n\n"
         f"Context:\n{context_str}\n\n"
         f"Câu hỏi của người dùng: {query}"
     )
@@ -69,13 +67,15 @@ async def generate_medical_answer(
         response = await client.aio.models.generate_content(
             model=LLM_MODEL,
             contents=full_prompt,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": MedicalResponseSchema,
-                "temperature": 0.1,
-            },
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                response_schema=MedicalResponseSchema,
+                temperature=0.1,
+                # Tắt hoàn toàn cơ chế thinking để tối ưu tốc độ phản hồi cho RAG (< 3s)
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
-
         # Ưu tiên response.parsed (đã được SDK map sang Pydantic), fallback sang parse JSON thô
         if isinstance(response.parsed, MedicalResponseSchema):
             return response.parsed
