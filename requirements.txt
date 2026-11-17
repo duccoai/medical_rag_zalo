@@ -1,10 +1,62 @@
-fastapi>=0.110.0 # framework chính để xây dựng các đường dẫn web api nhanh và hiện đại
-uvicorn[standard]>=0.28.0 # máy chủ web (ASGI server) chạy ứng dụng FastAPI của bạn lên mạng or local
-pydantic>=2.6.0 # tools kiểm tra tính hợp lệ của dữ liệu đầu vào và đầu ra
-pydantic-settings>=2.2.0 # hỗ trợ đọc thông sô cấu hình dữ liệu hệ thống từ .env an toàn
-google-genai>=3.3.0 # SDK chính thức của Google Gemini -> xử lý câu hỏi (client.aio, response_schema)
-asyncpg>=0.29.0 # tools hỗ trợ lưu trữ và tìm kiếm dữ liệu dạng vector trong PostgreSQL
-pgvector>=0.2.5 
-redis>=5.0.0 #thư viện kết nối với hệ thống lưu trữ bộ nhớ đệm Redis, tăng tốc độ response or lưu repo chat
-python-dotenv>=1.0.1 # tải các biến bảo mật (như mã khóa API) từ file .env vào chương trình 
-pytest>=8.0.0 # tools để viết và chạy các bài test tự động
+﻿annotated-doc==0.0.6
+annotated-types==0.8.0
+anyio==4.16.0
+asyncpg==0.32.0
+certifi==2026.10.23
+cffi==2.1.1
+charset-normalizer==3.5.2
+click==8.5.1
+colorama==0.4.6
+cryptography==50.0.2
+distro==1.9.0
+fastapi==0.162.4
+google-auth==2.62.2
+google-genai==3.3.0
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.16.0
+httptools==0.9.0
+httpx==0.28.1
+httpx2==2.16.0
+idna==3.20
+iniconfig==2.3.1
+jiter==0.19.0
+jsonpatch==1.47
+jsonpointer==3.12
+langchain-core==1.8.1
+langchain-protocol==0.0.21
+langchain-text-splitters==1.1.3
+langsmith==0.14.17
+openai==3.49.0
+opentelemetry-api==1.45.2
+orjson==3.13.0
+packaging==26.3
+pgvector==0.5.1
+pluggy==1.7.0
+pyasn1==0.6.5
+pyasn1_modules==0.4.2
+pycparser==3.12
+pydantic==2.14.3
+pydantic-settings==2.16.2
+pydantic_core==2.50.4
+Pygments==2.21.0
+pypdf==7.1.0
+pytest==9.2.0
+python-dotenv==1.2.4
+PyYAML==6.0.3
+redis==8.1.0
+requests==2.34.2
+requests-toolbelt==1.0.0
+sniffio==1.3.1
+starlette==1.10.0
+tenacity==9.1.4
+truststore==0.10.5
+typing-inspection==0.4.5
+typing_extensions==4.16.0
+urllib3==2.8.0
+uuid_utils==0.19.0
+uvicorn==0.54.0
+watchfiles==1.3.0
+websockets==17.4
+xxhash==4.1.0
+zstandard==0.25.0
