@@ -65,9 +65,14 @@ def extract_and_chunk_pdf(
 
         # 4. GẮN METADATA VÀ LƯU TRỮ
         for chunk in sub_chunks:
+            # fix lỗi dính dấu chấm/ phẩy thừa ở đầu chunk
+            fixed_chunk = re.sub(r"^[\.\,\;\:\s]+", "", chunk).strip()
+            if not fixed_chunk:
+                continue
+
             chunks_with_metadata.append(
                 {
-                    "content": chunk,  # Nội dung văn bản của chunk
+                    "content": fixed_chunk,  # Nội dung văn bản của chunk
                     "metadata": {
                         "source": file_path.name,  # Tên file nguồn
                         "page": page_num,          # Số trang chứa chunk này
