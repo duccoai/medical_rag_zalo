@@ -1,16 +1,21 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: medical-rag-pos
     platform: linux/amd64
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medicaloai11911}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medicaloai111}
       POSTGRES_DB: ${POSTGRES_DB:-medical_db}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d medical_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
