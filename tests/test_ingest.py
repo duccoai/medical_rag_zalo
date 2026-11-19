@@ -59,6 +59,6 @@ def test_extract_and_chunk_pdf():
 # === THÊM ĐOẠN PRINT NÀY ĐỂ XEM KẾT QUẢ TRỰC QUAN ===
     print(f"\n👉 Tổng số chunks trích xuất được từ PDF thực tế: {len(chunks)}")
     if len(chunks) > 50:
-        print(f"\n🔍 Mẫu chunk 50:\n{chunks[50]}")
+        print(f"\n🔍 Mẫu chunk 50:\n{chunks[100]}")
     else:
         print(f"\n🔍 Mẫu chunk cuối:\n{chunks[-1]}")
