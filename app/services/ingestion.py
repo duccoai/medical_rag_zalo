@@ -11,6 +11,7 @@ from langchain_text_splitters import (
 from app.core.exceptions import AppBaseException
 
 # Tầng 1 (cấu trúc): cấp tiêu đề cần băm. Key là tên trường lưu trong metadata "headers".
+#hmm.. khai báo các Constants - mẫu nhận diện (là các cụm in hoa có gạch ngang đáy)
 HEADERS_TO_SPLIT_ON = [
     ("#", "h1"),
     ("##", "h2"),
@@ -32,7 +33,8 @@ EMPHASIS_PATTERN = re.compile(r"[*_`]+")
 BLANK_LINES_PATTERN = re.compile(r"\n{3,}")
 LEADING_PUNCTUATION_PATTERN = re.compile(r"^[\.\,\;\:\s]+")
 
-
+# định nghĩa hàm nhận diện dòng heading Markdown, use HEADING_PATTERN
+# (Bỏ qua tiêu đề (không cho vào diện xóa rác lặp lại) và giữ nguyên dấu # để Tầng 1 còn biết đường chia mục)
 def _is_repeat_candidate(line: str) -> bool:
     """Dòng văn bản thường (không phải heading, bảng) đủ ngắn để có thể là header/footer"""
     stripped = line.strip()
@@ -43,7 +45,8 @@ def _is_repeat_candidate(line: str) -> bool:
         and len(stripped) <= REPEAT_MAX_LENGTH
     )
 
-
+# định nghĩa hàm làm sạch markdown (after read and converter pdf -> markdown)
+# (Sau khi Tầng 1 tách mục xong, lôi title ra gọt dấu *, _, ` và khoảng thừa before lưu metadata và gắn Breadcrumb)
 def clean_markdown_text(markdown: str) -> str:
     """Lọc nhẹ Markdown: bỏ header/footer lặp lại và số trang đứng riêng, giữ nguyên tiêu đề và nội dung"""
     lines = [line.rstrip() for line in markdown.splitlines()]
@@ -59,7 +62,7 @@ def clean_markdown_text(markdown: str) -> str:
     kept_lines: list[str] = []
     for line in lines:
         stripped = line.strip()
-        if PAGE_NUMBER_PATTERN.match(stripped):
+        if PAGE_NUMBER_PATTERN.match(stripped): # bắt các số trang từ pdf thành MD đang đứng riêng để xóa nó tránh nhiễu content, vector..
             continue
         if _is_repeat_candidate(line) and " ".join(stripped.split()).lower() in repeated_lines:
             continue
@@ -68,7 +71,7 @@ def clean_markdown_text(markdown: str) -> str:
     cleaned = "\n".join(kept_lines)
     return BLANK_LINES_PATTERN.sub("\n\n", cleaned).strip()
 
-
+# hàm chuyển toàn bộ pdf thành chuỗi markdown
 def pdf_to_markdown(pdf_path: Path) -> str:
     """Chuyển toàn bộ PDF thành một chuỗi Markdown liền mạch, không tách theo trang"""
     try:
@@ -79,12 +82,13 @@ def pdf_to_markdown(pdf_path: Path) -> str:
             status_code=422,
         ) from ex
 
-
+# hàm làm sạch title khi đã 
 def _clean_header_text(text: str) -> str:
     """Bỏ ký tự định dạng Markdown (*, _, `) còn sót trong tên tiêu đề"""
     return " ".join(EMPHASIS_PATTERN.sub("", text).split())
 
 
+# 2 hàm dưới là setup và gắn breadcrumb vào content mỗi chunk
 def _build_breadcrumb(headers: dict[str, str]) -> str:
     """Nối chuỗi phân cấp tiêu đề: 'Header 1 > Header 2 > Header 3'"""
     return " > ".join(headers[key] for key in HEADER_KEYS if headers.get(key))
