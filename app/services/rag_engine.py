@@ -1,12 +1,18 @@
 import logging
 import traceback
+import asyncio
 
 from google import genai
 from google.genai import errors, types
 
 from app.core.config import settings
-from app.core.exceptions import AppBaseException
+from app.core.exceptions import (AppBaseException, TransientServiceException)
 from app.schemas.medical import MedicalResponseSchema
+from app.db.pgvector_store import (
+    insert_chunks_with_embeddings,
+    search_similar_vectors,
+)
+from app.services.embedding import embed_documents, embed_queries
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,39 @@ async def _call_gemini(model: str, full_prompt: str) -> MedicalResponseSchema:
         raise ValueError("Gemini trả về nội dung rỗng (có thể bị chặn bởi safety filter)")
     return MedicalResponseSchema.model_validate_json(response.text)
 
+
+async def ingest_document_chunks(chunks: list[dict]) -> int:
+    """Luồng Ingest (chạy ở Background Worker): Chuyển chunks -> vectors -> lưu pgvector"""
+    if not chunks:
+        return 0
+    texts = [item["content"] for item in chunks]
+    vectors = await embed_documents(texts)
+    return await insert_chunks_with_embeddings(chunks=chunks, embeddings=vectors)
+
+
+async def retrieve_medical_contexts(
+    query: str,
+    top_k: int = 3,
+    similarity_threshold: float = 0.5,
+    category_filter: str | None = None,
+    retrieval_timeout: float = 6.0,
+) -> list[dict]:
+    """Luồng Query Realtime (Zalo Chat): Embed câu hỏi + Truy vấn HNSW trong giới hạn timeout"""
+    async def _run_retrieval() -> list[dict]:
+        query_vector = await embed_queries(query)
+        return await search_similar_vectors(
+            query_vector=query_vector,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+            category_filter=category_filter,
+        )
+
+    try:
+        return await asyncio.wait_for(_run_retrieval(), timeout=retrieval_timeout)
+    except asyncio.TimeoutError as exc:
+        raise TransientServiceException(
+            f"Quá thời gian truy xuất dữ liệu y tế ({retrieval_timeout}s)."
+        ) from exc
 
 # Hàm điều phối chính: ghép context vào prompt và trả về câu trả lời đúng cấu trúc MedicalResponseSchema.
 # Nếu model hiện tại trả về 503/504, tự động thử model dự phòng tiếp theo trong LLM_MODELS.
