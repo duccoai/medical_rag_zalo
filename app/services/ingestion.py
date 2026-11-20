@@ -49,6 +49,8 @@ def _is_repeat_candidate(line: str) -> bool:
 # (Sau khi Tầng 1 tách mục xong, lôi title ra gọt dấu *, _, ` và khoảng thừa before lưu metadata và gắn Breadcrumb)
 def clean_markdown_text(markdown: str) -> str:
     """Lọc nhẹ Markdown: bỏ header/footer lặp lại và số trang đứng riêng, giữ nguyên tiêu đề và nội dung"""
+    # Chuẩn hoá ký tự "ƣ/Ƣ" (lỗi mã hoá của PDF) thành "ư/Ư"
+    markdown = markdown.replace("ƣ", "ư").replace("Ƣ", "Ư")
     lines = [line.rstrip() for line in markdown.splitlines()]
 
     # Đếm số lần xuất hiện của từng dòng ứng viên header/footer (so khớp theo chữ thường, bỏ khoảng trắng thừa)
