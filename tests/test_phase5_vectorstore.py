@@ -4,6 +4,8 @@ import pytest
 from google.genai import errors as genai_errors
 from app.core.config import settings
 from app.db.pgvector_store import close_db_pool, get_db_pool, init_vector_db
+from tenacity import wait_fixed
+from app.services import embedding as embedding_service
 from app.services.embedding import embed_documents, set_genai_client
 from app.services.rag_engine import (
     ingest_document_chunks,
@@ -12,8 +14,11 @@ from app.services.rag_engine import (
 
 
 @pytest.mark.asyncio
-async def test_embedding_batching_and_retry_unit():
+async def test_embedding_batching_and_retry_unit(monkeypatch):
     """Unit Test: Kiểm tra chia batch 64, chạy song song và tự động retry khi gặp lỗi 429"""
+    # Bỏ chờ thật (pacing + backoff) để test chạy nhanh; logic chờ được kiểm thử riêng ở production code
+    monkeypatch.setattr(settings, "EMBEDDING_BATCH_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(embedding_service, "_BATCH_WAIT", wait_fixed(0))
     call_counter = 0
 
     async def fake_embed_content(model, contents, config):

@@ -57,6 +57,17 @@ async def init_vector_db() -> None:
             """
         )
 
+        # chunk_key = "<source>:<chunk_index>" giúp chạy lại script upsert đúng bản ghi, không nhân đôi dữ liệu
+        await conn.execute(
+            "ALTER TABLE medical_documents ADD COLUMN IF NOT EXISTS chunk_key TEXT;"
+        )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_medical_documents_chunk_key
+            ON medical_documents (chunk_key);
+            """
+        )
+
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_medical_documents_embedding_hnsw
@@ -93,6 +104,7 @@ async def insert_chunks_with_embeddings(
                 item["content"],
                 json.dumps(item["metadata"], ensure_ascii=False),
                 emb,  # Truyền trực tiếp list[float], bỏ str(emb)
+                f"{item['metadata']['source']}:{item['metadata']['chunk_index']}",
             )
             for item, emb in zip(chunk_slice, emb_slice)
         ]
@@ -100,8 +112,12 @@ async def insert_chunks_with_embeddings(
         async with pool.acquire() as conn:
             await conn.executemany(
                 """
-                INSERT INTO medical_documents (content, metadata, embedding)
-                VALUES ($1, $2::jsonb, $3)
+                INSERT INTO medical_documents (content, metadata, embedding, chunk_key)
+                VALUES ($1, $2::jsonb, $3, $4)
+                ON CONFLICT (chunk_key) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    metadata = EXCLUDED.metadata,
+                    embedding = EXCLUDED.embedding
                 """,
                 records,
             )

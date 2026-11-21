@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSIONS: int = 768        # Chuẩn Matryoshka tối ưu HNSW (< 2000d)
     EMBEDDING_BATCH_SIZE: int = 64         # Số chunks tối đa mỗi request API (50-100 để tránh 429)
     EMBEDDING_MAX_CONCURRENCY: int = 1     # Số batch chạy song song (1 = tuần tự, tránh dồn request)
-    EMBEDDING_BATCH_INTERVAL_SECONDS: float = 4.0  # Thời gian nghỉ sau mỗi batch nạp tài liệu
+    EMBEDDING_BATCH_INTERVAL_SECONDS: float = 12.0  # Khoảng cách tối thiểu giữa 2 request nạp tài liệu (Free Tier nên 10-15s)
     EMBEDDING_BATCH_MAX_RETRIES: int = 5   # Số lần retry tối đa cho mỗi batch khi gặp 429/5xx
     EMBEDDING_QUERY_TIMEOUT: float = 5.0   # Timeout chặt cho luồng chat realtime Zalo
     EMBEDDING_BATCH_TIMEOUT: float = 20.0  # Timeout cho mỗi batch nạp tài liệu nền
