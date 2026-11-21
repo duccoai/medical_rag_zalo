@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from pathlib import Path
 from app.db.pgvector_store import (
@@ -102,4 +103,5 @@ async def run_ingestion_pipeline(default_category: str = "tu_van_nha_thuoc") -> 
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     asyncio.run(run_ingestion_pipeline())

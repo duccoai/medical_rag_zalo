@@ -1,6 +1,8 @@
 import logging
+import math
 import traceback
 import asyncio
+import time
 
 from google import genai
 from google.genai import errors, types
@@ -85,12 +87,26 @@ async def _call_gemini(model: str, full_prompt: str) -> MedicalResponseSchema:
 
 
 async def ingest_document_chunks(chunks: list[dict]) -> int:
-    """Luồng Ingest (chạy ở Background Worker): Chuyển chunks -> vectors -> lưu pgvector"""
+    """Luồng Ingest (chạy ở Background Worker): embed + lưu pgvector theo từng batch để có tiến độ và không mất công khi lỗi"""
     if not chunks:
         return 0
-    texts = [item["content"] for item in chunks]
-    vectors = await embed_documents(texts)
-    return await insert_chunks_with_embeddings(chunks=chunks, embeddings=vectors)
+    batch_size = settings.EMBEDDING_BATCH_SIZE
+    total = len(chunks)
+    total_batches = math.ceil(total / batch_size)
+    inserted_total = 0
+    logger.info("Bắt đầu nạp %d chunks thành %d batch (mỗi batch tối đa %d)", total, total_batches, batch_size)
+    for batch_no, start in enumerate(range(0, total, batch_size), start=1):
+        batch = chunks[start : start + batch_size]
+        batch_started = time.perf_counter()
+        vectors = await embed_documents([item["content"] for item in batch])
+        # Upsert theo chunk_key "<source>:<chunk_index>" nên chạy lại không nhân đôi dữ liệu
+        inserted = await insert_chunks_with_embeddings(chunks=batch, embeddings=vectors)
+        inserted_total += inserted
+        logger.info(
+            "Batch %d/%d hoàn tất: upsert %d chunks trong %.1fs (tổng %d/%d)",
+            batch_no, total_batches, inserted, time.perf_counter() - batch_started, inserted_total, total,
+        )
+    return inserted_total
 
 
 async def retrieve_medical_contexts(
