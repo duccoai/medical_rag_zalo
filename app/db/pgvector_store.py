@@ -4,18 +4,24 @@ from pgvector.asyncpg import register_vector
 from app.core.config import settings
 from app.core.exceptions import AppBaseException
 
+# TẦNG 1 - BIẾN DÙNG CHUNG CỦA LỚP LƯU TRỮ VECTOR
+# Giữ 1 Connection Pool dùng chung cho toàn bộ thao tác DB để không phải mở/đóng kết nối liên tục
 _pool: asyncpg.Pool | None = None
 
 
+# TẦNG 2 - QUẢN LÝ KẾT NỐI & POOL POSTGRESQL
+# Hàm đổi chuỗi connection string từ dạng SQLAlchemy sang dạng DSN thuần mà asyncpg hiểu được
 def _get_asyncpg_dsn() -> str:
     """Chuyển đổi URL chuẩn SQLAlchemy sang DSN thuần cho asyncpg"""
     return settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
 
 
+# Hàm lấy (hoặc tạo mới nếu chưa có) Connection Pool và gắn sẵn codec vector cho mỗi kết nối
 async def get_db_pool() -> asyncpg.Pool:
     """Khởi tạo hoặc tái sử dụng Connection Pool đã đăng ký kiểu dữ liệu vector"""
     global _pool
     if _pool is None:
+        # Mỗi kết nối mới mở trong pool sẽ chạy init_conn để đăng ký kiểu vector của pgvector
         async def init_conn(conn: asyncpg.Connection) -> None:
             await register_vector(conn)
 
@@ -28,6 +34,7 @@ async def get_db_pool() -> asyncpg.Pool:
     return _pool
 
 
+# Hàm đóng toàn bộ pool khi tắt app/server hoặc kết thúc chạy test để giải phóng tài nguyên
 async def close_db_pool() -> None:
     """Đóng Connection Pool khi tắt server hoặc kết thúc test"""
     global _pool
@@ -36,14 +43,18 @@ async def close_db_pool() -> None:
         _pool = None
 
 
+# TẦNG 3 - KHỞI TẠO SCHEMA & INDEX TRONG VECTOR DB
+# Hàm chuẩn bị môi trường DB lần đầu: bật extension vector, tạo bảng, thêm cột/index chống trùng và tạo index HNSW
 async def init_vector_db() -> None:
     """Khởi tạo extension vector, bảng medical_documents và chỉ mục HNSW"""
+    # Mở 1 kết nối lẻ trước để tạo extension vector (tránh xung đột khi pool đăng ký kiểu vector)
     raw_conn = await asyncpg.connect(_get_asyncpg_dsn())
     try:
         await raw_conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
     finally:
         await raw_conn.close()
 
+    # Dùng pool để tạo bảng, khóa định danh chunk_key và chỉ mục tìm kiếm vector HNSW
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -68,6 +79,7 @@ async def init_vector_db() -> None:
             """
         )
 
+        # Tạo chỉ mục HNSW dùng khoảng cách cosine (vector_cosine_ops) để tìm vector nhanh trên tập dữ liệu lớn
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_medical_documents_embedding_hnsw
@@ -78,6 +90,8 @@ async def init_vector_db() -> None:
         )
 
 
+# TẦNG 4 - GHI / UPSERT DỮ LIỆU VECTOR VÀO DB (LUỒNG NẠP OFFLINE)
+# Hàm nhận sẵn danh sách chunks và vector đã tính từ bên ngoài, chia lô ghi hàng loạt và upsert theo chunk_key
 async def insert_chunks_with_embeddings(
     chunks: list[dict],
     embeddings: list[list[float]],
@@ -86,6 +100,7 @@ async def insert_chunks_with_embeddings(
     """Lưu danh sách chunks kèm vector đã tính sẵn vào PostgreSQL bằng executemany"""
     if not chunks:
         return 0
+    # Chặn sớm nếu số lượng chunk và vector bị lệch nhau để tránh ghép sai dữ liệu
     if len(chunks) != len(embeddings):
         raise AppBaseException(
             message=f"Số lượng chunks ({len(chunks)}) không khớp số lượng vectors ({len(embeddings)}).",
@@ -95,6 +110,7 @@ async def insert_chunks_with_embeddings(
     pool = await get_db_pool()
     inserted_count = 0
 
+    # Chia nhỏ từng lô (mặc định 200 dòng) để ghi xuống Postgres gọn và ổn định
     for i in range(0, len(chunks), db_batch_size):
         chunk_slice = chunks[i : i + db_batch_size]
         emb_slice = embeddings[i : i + db_batch_size]
@@ -103,12 +119,13 @@ async def insert_chunks_with_embeddings(
             (
                 item["content"],
                 json.dumps(item["metadata"], ensure_ascii=False),
-                emb,  # Truyền trực tiếp list[float], bỏ str(emb)
+                emb,  # Truyền trực tiếp list[float] nhờ đã register_vector ở init_conn
                 f"{item['metadata']['source']}:{item['metadata']['chunk_index']}",
             )
             for item, emb in zip(chunk_slice, emb_slice)
         ]
 
+        # Mượn 1 kết nối từ pool và thực thi upsert: trùng chunk_key thì cập nhật lại nội dung/metadata/vector
         async with pool.acquire() as conn:
             await conn.executemany(
                 """
@@ -126,6 +143,8 @@ async def insert_chunks_with_embeddings(
     return inserted_count
 
 
+# TẦNG 5 - TÌM KIẾM TƯƠNG ĐỒNG VECTOR (LUỒNG TRUY VẤN ONLINE)
+# Hàm nhận vector câu hỏi đã embed sẵn, dò các đoạn tài liệu giống nhất trong pgvector (có lọc ngưỡng điểm & metadata)
 async def search_similar_vectors(
     query_vector: list[float],
     top_k: int = 3,
@@ -136,9 +155,12 @@ async def search_similar_vectors(
     pool = await get_db_pool()
 
     async with pool.acquire() as conn:
+        # Mở transaction để lệnh SET LOCAL chỉ có hiệu lực cục bộ cho câu truy vấn bên dưới
         async with conn.transaction():
+            # Tăng/giữ ef_search = 64 để cân bằng giữa tốc độ dò HNSW và độ chính xác recall
             await conn.execute("SET LOCAL hnsw.ef_search = 64;")
 
+            # Toán tử <=> là cosine distance; 1 - khoảng cách sẽ ra điểm similarity (càng gần 1 càng giống)
             sql = """
                 SELECT
                     id,
@@ -150,6 +172,7 @@ async def search_similar_vectors(
             """
             params: list = [query_vector, similarity_threshold]  # Truyền trực tiếp list[float]
 
+            # Nếu có lọc theo category trong JSONB metadata thì nối thêm điều kiện WHERE an toàn theo tham số
             if category_filter:
                 sql += f" AND metadata->>'category' = ${len(params) + 1}"
                 params.append(category_filter)
@@ -159,6 +182,7 @@ async def search_similar_vectors(
 
             rows = await conn.fetch(sql, *params)
 
+    # Chuẩn hóa dữ liệu trả về thành list[dict] gọn gàng cho tầng trên dùng
     return [
         {
             "id": row["id"],
