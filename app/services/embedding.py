@@ -3,6 +3,8 @@ import logging
 import re
 import time
 from typing import Callable, Literal, overload
+import httpx
+import httpx2
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -41,7 +43,20 @@ def get_genai_client() -> genai.Client:
     """Lazy-init Gemini Client giúp quản lý vòng đời gọn và dễ mock khi Unit Test"""
     global _client
     if _client is None:
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
+        request_timeout_ms = int(
+            max(
+                settings.EMBEDDING_QUERY_TIMEOUT,
+                settings.EMBEDDING_BATCH_TIMEOUT,
+            )
+            * 1000
+        )
+        _client = genai.Client(
+            api_key=settings.GEMINI_API_KEY.get_secret_value(),
+            http_options=types.HttpOptions(
+                timeout=request_timeout_ms,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
     return _client
 
  # công tắc cho phép thay/ mock client từ bên ngoài (tiện cho unit test or đổi key)
@@ -54,7 +69,16 @@ def set_genai_client(client: genai.Client | None) -> None:
 # các lỗi này chạy qua batch wait để tự tính giờ nghỉ (ngoại trừ lỗi 429) 
 def _is_transient_error(exc: Exception) -> bool:
     """Phân loại lỗi tạm thời (Timeout, Mạng, Rate Limit 429, Server 503/504)"""
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError)):
+    if isinstance(
+        exc,
+        (
+            asyncio.TimeoutError,
+            TimeoutError,
+            ConnectionError,
+            httpx.TransportError,
+            httpx2.TransportError,
+        ),
+    ):
         return True
     if isinstance(exc, genai_errors.APIError):
         return exc.code in {429, 500, 502, 503, 504}

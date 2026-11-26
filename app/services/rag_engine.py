@@ -1,9 +1,10 @@
 import logging
 import math
-import traceback
 import asyncio
 import time
 
+import httpx
+import httpx2
 from google import genai
 from google.genai import errors, types
 
@@ -18,24 +19,26 @@ from app.services.embedding import embed_documents, embed_queries
 
 logger = logging.getLogger(__name__)
 
-# Thời gian chờ tối đa cho mỗi request tới Gemini (đơn vị: mili giây).
-# Không có timeout thì socket bị treo sẽ khiến loading chờ vô hạn.
-LLM_TIMEOUT_MS = 60_000
+# Cho phép đủ thời gian sinh JSON; vẫn giới hạn từng model trước khi fallback.
+LLM_TIMEOUT_MS = 30_000
 
 # Client Gemini (google-genai). Dùng client.aio để gọi bất đồng bộ, không block event loop của FastAPI
 client = genai.Client(
     api_key=settings.GEMINI_API_KEY.get_secret_value(),
-    http_options=types.HttpOptions(timeout=LLM_TIMEOUT_MS),  # qly timeout 60s tránh bị treo kết nối socket vô hạn
+    http_options=types.HttpOptions(
+        timeout=LLM_TIMEOUT_MS,
+        retry_options=types.HttpRetryOptions(attempts=1),
+    ),
 )
 
 # Danh sách model theo thứ tự ưu tiên: phần tử đầu là model chính, các phần tử sau là model dự phòng.
 LLM_MODELS = [
-    "gemini-3.5-flash",       # model chính
-    "gemini-3.7-flash",       # dự phòng 1
-    "gemini-3.8-flash",  # dự phòng 2
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
 ]
 # Mã lỗi quá tải (503) hoặc hết thời gian chờ phía server (504) thì mới chuyển sang model kế tiếp
-FALLBACK_STATUS_CODES = {503, 504}
+FALLBACK_STATUS_CODES = {429, 503, 504}
 
 SYSTEM_INSTRUCTION = (
     "Bạn là Trợ lý Y tế Thông minh. Chỉ sử dụng thông tin trong tài liệu Context được cung cấp để tư vấn.\n"
@@ -73,9 +76,7 @@ async def _call_gemini(model: str, full_prompt: str) -> MedicalResponseSchema:
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
             response_schema=MedicalResponseSchema,
-            temperature=0.1,
-            # Tắt hoàn toàn cơ chế thinking để tối ưu tốc độ phản hồi cho RAG (< 3s)
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
         ),
     )
     # Ưu tiên response.parsed (đã được SDK map sang Pydantic), fallback sang parse JSON thô
@@ -149,19 +150,17 @@ async def generate_medical_answer(
         f"Câu hỏi của người dùng: {query}"
     )
 
-    last_error: errors.APIError | None = None
+    last_error: Exception | None = None
     for index, model in enumerate(LLM_MODELS):
         try:
             return await _call_gemini(model, full_prompt)
 
         except errors.APIError as e:
-            # IN CHI TIẾT LỖI RA TERMINAL ĐỂ DEBUG
-            print(f"🔥 LỖI GOOGLE API CHI TIẾT: model={model}, code={e.code}, status={e.status}, message={e.message}")
             logger.error(
                 "Lỗi gọi Gemini API (model=%s, code=%s, status=%s): %s",
                 model, e.code, e.status, e.message,
             )
-            # Lỗi khác 503/504 (ví dụ 400, 401, 429) không phải lỗi tạm thời của server nên không fallback
+            # Chỉ fallback lỗi rate limit hoặc lỗi tạm thời phía dịch vụ.
             if e.code not in FALLBACK_STATUS_CODES:
                 raise AppBaseException(
                     message="Dịch vụ tư vấn AI tạm thời không khả dụng, vui lòng thử lại sau.",
@@ -175,21 +174,104 @@ async def generate_medical_answer(
                     "Model %s quá tải (code=%s), chuyển sang model dự phòng %s",
                     model, e.code, LLM_MODELS[index + 1],
                 )
-                print(f"⚠️ Model {model} lỗi {e.code}, đang chuyển sang {LLM_MODELS[index + 1]}")
+
+        except (
+            httpx.TransportError,
+            httpx2.TransportError,
+            TimeoutError,
+            ConnectionError,
+        ) as e:
+            last_error = e
+            has_next = index + 1 < len(LLM_MODELS)
+            logger.warning(
+                "Lỗi kết nối Gemini (model=%s, error=%s): %s",
+                model,
+                type(e).__name__,
+                e,
+            )
+            if has_next:
+                logger.warning(
+                    "Chuyển từ model %s sang model dự phòng %s",
+                    model,
+                    LLM_MODELS[index + 1],
+                )
 
         except Exception as ex:
-            # Bắt các lỗi khác: timeout/kết nối, lỗi parse JSON, lỗi validate Pydantic, lỗi thư viện
-            print(f"🔥 LỖI KHÔNG XÁC ĐỊNH (model={model}): {type(ex).__name__}: {ex}")
-            print(traceback.format_exc())
+            # Lỗi cấu hình, parse JSON hoặc validate không phải lỗi kết nối tạm thời.
             logger.exception("Lỗi không xác định khi gọi Gemini (model=%s): %s", model, ex)
             raise AppBaseException(
-                message=f"Lỗi hệ thống: {type(ex).__name__}: {ex}",
+                message="Lỗi hệ thống khi gọi dịch vụ tư vấn AI.",
                 status_code=502,
             ) from ex
 
-    # Tất cả model trong danh sách đều quá tải/timeout
+    # Tất cả model trong danh sách đều quá tải/timeout -> Trả về TransientServiceException (503, retryable=True)
     logger.error("Tất cả model dự phòng (%s) đều không khả dụng", ", ".join(LLM_MODELS))
-    raise AppBaseException(
-        message="Dịch vụ tư vấn AI tạm thời không khả dụng, vui lòng thử lại sau.",
-        status_code=502,
+    raise TransientServiceException(
+        "Dịch vụ tư vấn AI tạm thời quá tải hoặc hết thời gian phản hồi, vui lòng thử lại sau ít phút."
     ) from last_error
+
+# Hàm chuyển danh sách kết quả từ pgvector thành các khối text có ghi rõ nguồn & tiêu đề để LLM trích dẫn chuẩn
+def _format_retrieved_contexts(matches: list[dict]) -> list[str]:
+    """Định dạng kết quả từ pgvector kèm metadata nguồn rõ ràng để LLM trích dẫn chính xác"""
+    formatted_contexts: list[str] = []
+    for idx, item in enumerate(matches, start=1):
+        meta = item.get("metadata") or {}
+        source = meta.get("source", "Tài liệu y khoa")
+        headers = meta.get("headers")
+
+        # Ghép chuỗi phân cấp tiêu đề (h1 > h2...) nếu có, không thì fallback sang số trang hoặc tên nguồn
+        if isinstance(headers, dict) and headers:
+            section = " > ".join(str(v) for v in headers.values() if v)
+            citation = f"{source} ({section})" if section else source
+        elif meta.get("page"):
+            citation = f"{source} (Trang {meta['page']})"
+        else:
+            citation = source
+
+        formatted_contexts.append(
+            f"[Tài liệu {idx} | Nguồn: {citation} | Độ tương đồng: {item['similarity']}]\n"
+            f"{item['content']}"
+        )
+    return formatted_contexts
+
+
+# Hàm điều phối trọn luồng hỏi - đáp RAG: Guardrail -> Tìm vector -> Chặn nếu rỗng -> Ghép ngữ cảnh & gọi LLM
+async def answer_medical_query(
+    query: str,
+    top_k: int = 3,
+    similarity_threshold: float = 0.5,
+    category_filter: str | None = None,
+) -> MedicalResponseSchema:
+    """Pipeline RAG hoàn chỉnh: Guardrail -> Retrieve pgvector -> Format Context -> Generate LLM"""
+    # Bước 1: Kiểm tra từ khóa cấp cứu ngay từ đầu (0ms DB, 0 token LLM)
+    emergency_response = check_input_guardrail(query)
+    if emergency_response:
+        return emergency_response
+
+    # Bước 2: Nhúng câu hỏi và truy vấn các đoạn tài liệu y tế liên quan nhất từ PostgreSQL
+    matches = await retrieve_medical_contexts(
+        query=query,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        category_filter=category_filter,
+    )
+
+    # Bước 3: Nếu không có chunk nào đạt ngưỡng tương đồng thì từ chối lịch sự, không gọi LLM đoán mò
+    if not matches:
+        return MedicalResponseSchema(
+            answer=(
+                "Xin lỗi, cơ sở dữ liệu y khoa hiện tại của tôi chưa có thông tin chính thức "
+                "về vấn đề bạn đang hỏi. Bạn vui lòng tham khảo ý kiến trực tiếp của bác sĩ "
+                "hoặc dược sĩ chuyên môn để được tư vấn chính xác."
+            ),
+            recommended_dosage=None,
+            sources=[],
+            urgency_flag=False,
+        )
+
+    # Bước 4: Chuẩn hóa context kèm thông tin nguồn rồi gọi hàm sinh câu trả lời có cấu trúc
+    formatted_contexts = _format_retrieved_contexts(matches)
+    return await generate_medical_answer(
+        query=query,
+        retrieved_contexts=formatted_contexts,
+    )
