@@ -50,7 +50,7 @@ async def init_vector_db() -> None:
     # Mở 1 kết nối lẻ trước để tạo extension vector (tránh xung đột khi pool đăng ký kiểu vector)
     raw_conn = await asyncpg.connect(_get_asyncpg_dsn())
     try:
-        await raw_conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+         await raw_conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
     finally:
         await raw_conn.close()
 

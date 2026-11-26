@@ -2,6 +2,7 @@ from app.core.exceptions import AppBaseException
 from app.schemas.chat_schema import ChatRequest, ChatResponse
 from fastapi import APIRouter
 from app.services.rag_engine import generate_medical_answer
+from app.services.rag_engine import answer_medical_query
 
 #router = APIRouter(prefix="/chat", tags=["Chat Test"])
 
@@ -31,22 +32,23 @@ TEMP_MEDICAL_CONTEXT = [
     "Tuyệt đối không dùng Aspirin, Analgin, Ibuprofen để hạ sốt vì có thể gây xuất huyết, toan máu."
 ]
 
-# Mở cửa ngõ nhận yêu cầu POST và cam kết đầu ra luôn đúng khuôn ChatResponse
-@router.post("", response_model=ChatResponse, summary="Tư vấn y tế qua LLM Guardrail")
-async def chat_with_bot(payload: ChatRequest):  # 'payload' là dữ liệu khách gửi lên đã qua kiểm duyệt
-
-    # 1. Giao câu hỏi + tài liệu cho tầng AI xử lý và đứng chờ (await) kết quả nội bộ
-    ai_result = await generate_medical_answer(
+# Endpoint POST /api/v1/chat: nối trực tiếp pipeline RAG thật (Guardrail -> Vector DB -> LLM)
+@router.post("", response_model=ChatResponse, summary="Tư vấn y tế qua RAG & LLM Guardrail")
+async def chat_with_bot(payload: ChatRequest):
+    # Gọi bộ điều phối RAG hoàn chỉnh, không còn dùng context giả lập TEMP_MEDICAL_CONTEXT nữa
+    ai_result = await answer_medical_query(
         query=payload.message,
-        retrieved_contexts=TEMP_MEDICAL_CONTEXT,
+        top_k=3,
+        similarity_threshold=0.5,
+        category_filter=payload.category,
     )
 
-    # 2. Lắp ráp kết quả từ AI vào khuôn giao tiếp chuẩn (ChatResponse) để trả về cho khách
+    # Chuyển đổi kết quả từ MedicalResponseSchema sang ChatResponse
     return ChatResponse(
-        reply=ai_result.answer,  # Đổi tên 'answer' -> 'reply' cho khớp giao diện Web/App
+        reply=ai_result.answer,
         recommended_dosage=ai_result.recommended_dosage,
         sources=ai_result.sources,
         disclaimer=ai_result.disclaimer,
         urgency_flag=ai_result.urgency_flag,
-        is_mock=False,  # Gắn nhãn xác nhận đây là dữ liệu từ AI thật
+        is_mock=False,
     )

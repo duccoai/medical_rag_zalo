@@ -2,19 +2,10 @@ from pydantic import BaseModel, Field
 
 #khai báo đầy đủ các field cho cả ChatRequest và ChatReponse với Pydantic Field(...)
 class ChatRequest(BaseModel):
-    user_id: str = Field(
-        ...,
-        min_length=1,
-        examples=["user_001"],
-        description="ID định danh người dùng",
-    )
-    message: str = Field(
-        ...,
-        min_length=2,
-        max_length=1000,
-        examples=["Trẻ bị sốt xuất huyết nên uống thuốc gì?"],
-        description="Câu hỏi tư vấn y tế",
-    )
+    user_id: str = Field(..., min_length=1, description="ID định danh người dùng")
+    message: str = Field(..., min_length=2, max_length=1000, description="Câu hỏi tư vấn y tế")
+    category: str | None = Field(default=None, description="Danh mục tài liệu y tế (nếu có)")
+
 
 
 class ChatResponse(BaseModel):
