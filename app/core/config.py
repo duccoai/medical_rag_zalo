@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "medicaloai11911"
     POSTGRES_DB: str = "medical_db"
 
-    # Zalo OA
-    ZALO_APP_SECRET: SecretStr
-    ZALO_OA_ACCESS_TOKEN: SecretStr
+    # Zalo OA (Optional until Zalo module is implemented)
+    ZALO_APP_SECRET: SecretStr | None = Field(default=None, description="Zalo App Secret (Optional until Zalo module is implemented)")
+    ZALO_OA_ACCESS_TOKEN: SecretStr | None = Field(default=None, description="Zalo OA Access Token (Optional until Zalo module is implemented)")
 
     @computed_field
     @property
