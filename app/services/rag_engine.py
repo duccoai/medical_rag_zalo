@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Cho phép đủ thời gian sinh JSON; vẫn giới hạn từng model trước khi fallback.
 LLM_TIMEOUT_MS = 30_000
+LLM_TIMEOUT_S = LLM_TIMEOUT_MS / 1000
 
 # Client Gemini (google-genai). Dùng client.aio để gọi bất đồng bộ, không block event loop của FastAPI
 client = genai.Client(
@@ -120,8 +121,10 @@ async def retrieve_medical_contexts(
     similarity_threshold: float = 0.5,
     category_filter: str | None = None,
     retrieval_timeout: float = 6.0,
+    deadline: float | None = None,
 ) -> list[dict]:
-    """Luồng Query Realtime (Zalo Chat): Embed câu hỏi + Truy vấn HNSW trong giới hạn timeout"""
+    """Luồng Query Realtime (Zalo Chat): Embed câu hỏi + Truy vấn HNSW trong giới hạn timeout.
+    deadline: thời điểm kết thúc tổng (time.monotonic). Nếu có, thời gian truy xuất không vượt quá phần còn lại."""
     async def _run_retrieval() -> list[dict]:
         query_vector = await embed_queries(query)
         return await search_similar_vectors(
@@ -131,11 +134,17 @@ async def retrieve_medical_contexts(
             category_filter=category_filter,
         )
 
+    timeout = retrieval_timeout
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise TransientServiceException("Hết thời gian chờ tổng khi chuẩn bị truy xuất dữ liệu y tế.")
+
     try:
-        return await asyncio.wait_for(_run_retrieval(), timeout=retrieval_timeout)
+        return await asyncio.wait_for(_run_retrieval(), timeout=timeout)
     except asyncio.TimeoutError as exc:
         raise TransientServiceException(
-            f"Quá thời gian truy xuất dữ liệu y tế ({retrieval_timeout}s)."
+            f"Quá thời gian truy xuất dữ liệu y tế ({timeout:.1f}s)."
         ) from exc
 
 # Hàm điều phối chính: ghép context vào prompt và trả về câu trả lời đúng cấu trúc MedicalResponseSchema.
@@ -144,12 +153,17 @@ async def generate_medical_answer(
     query: str,
     retrieved_contexts: list[str],
     source_index: dict[str, str] | None = None,
+    deadline: float | None = None,
 ) -> MedicalResponseSchema:
-    """source_index: map từ khóa chuẩn hóa -> trích dẫn chuẩn (sinh từ metadata). Dùng để kiểm chứng sources của LLM."""
+    """source_index: map từ khóa chuẩn hóa -> trích dẫn chuẩn (sinh từ metadata). Dùng để kiểm chứng sources của LLM.
+    deadline: thời điểm kết thúc tổng (time.monotonic). Mỗi model chỉ được dùng tối đa phần thời gian còn lại."""
 
     emergency_response = check_input_guardrail(query)
     if emergency_response:
         return emergency_response
+
+    if deadline is None:
+        deadline = time.monotonic() + settings.ANSWER_TOTAL_TIMEOUT
 
     context_str = "\n---\n".join(retrieved_contexts)
     # Chỉ ghép Context và câu hỏi; chỉ dẫn vai trò đã nằm trong SYSTEM_INSTRUCTION
@@ -160,8 +174,17 @@ async def generate_medical_answer(
 
     last_error: Exception | None = None
     for index, model in enumerate(LLM_MODELS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("Hết thời gian chờ tổng, không gọi thêm model nào sau %s", model)
+            break
+
         try:
-            result = await _call_gemini(model, full_prompt)
+            # Giới hạn model theo min(timeout riêng, thời gian còn lại của deadline tổng)
+            result = await asyncio.wait_for(
+                _call_gemini(model, full_prompt),
+                timeout=min(LLM_TIMEOUT_S, remaining),
+            )
             # Không tin sources do LLM sinh: chỉ giữ những nguồn khớp với tài liệu đã truy xuất
             return result.model_copy(
                 update={"sources": _verify_sources(result.sources, source_index or {})}
@@ -190,6 +213,7 @@ async def generate_medical_answer(
         except (
             httpx.TransportError,
             httpx2.TransportError,
+            asyncio.TimeoutError,
             TimeoutError,
             ConnectionError,
         ) as e:
@@ -286,11 +310,14 @@ async def answer_medical_query(
     similarity_threshold: float = 0.5,
     category_filter: str | None = None,
 ) -> MedicalResponseSchema:
-    """Pipeline RAG hoàn chỉnh: Guardrail -> Retrieve pgvector -> Format Context -> Generate LLM"""
+    """Pipeline RAG hoàn chỉnh: Guardrail -> Retrieve pgvector -> Format Context -> Generate LLM.
+    Toàn bộ pipeline (trừ guardrail) nằm trong deadline tổng settings.ANSWER_TOTAL_TIMEOUT."""
     # Bước 1: Kiểm tra từ khóa cấp cứu ngay từ đầu (0ms DB, 0 token LLM)
     emergency_response = check_input_guardrail(query)
     if emergency_response:
         return emergency_response
+
+    deadline = time.monotonic() + settings.ANSWER_TOTAL_TIMEOUT
 
     # Bước 2: Nhúng câu hỏi và truy vấn các đoạn tài liệu y tế liên quan nhất từ PostgreSQL
     matches = await retrieve_medical_contexts(
@@ -298,6 +325,7 @@ async def answer_medical_query(
         top_k=top_k,
         similarity_threshold=similarity_threshold,
         category_filter=category_filter,
+        deadline=deadline,
     )
 
     # Bước 3: Nếu không có chunk nào đạt ngưỡng tương đồng thì từ chối lịch sự, không gọi LLM đoán mò
@@ -319,4 +347,5 @@ async def answer_medical_query(
         query=query,
         retrieved_contexts=formatted_contexts,
         source_index=_build_source_index(matches),
+        deadline=deadline,
     )

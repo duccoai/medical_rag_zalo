@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_MAX_RETRIES: int = 5   # Số lần retry tối đa cho mỗi batch khi gặp 429/5xx
     EMBEDDING_QUERY_TIMEOUT: float = 5.0   # Timeout chặt cho luồng chat realtime Zalo
     EMBEDDING_BATCH_TIMEOUT: float = 20.0  # Timeout cho mỗi batch nạp tài liệu nền
+    ANSWER_TOTAL_TIMEOUT: float = 30.0     # Deadline tổng cho một lần tư vấn (truy xuất + gọi LLM các model dự phòng)
 
     # Database Configuration fields read from .env
     POSTGRES_SERVER: str = "localhost"
