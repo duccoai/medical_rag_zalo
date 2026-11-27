@@ -14,6 +14,7 @@ from app.core.exceptions import (AppBaseException, TransientServiceException)
 from app.schemas.medical import MedicalResponseSchema
 from app.db.pgvector_store import (
     insert_chunks_with_embeddings,
+    replace_source_chunks,
     search_similar_vectors,
 )
 from app.services.embedding import embed_documents, embed_queries
@@ -113,6 +114,17 @@ async def ingest_document_chunks(chunks: list[dict]) -> int:
             batch_no, total_batches, inserted, time.perf_counter() - batch_started, inserted_total, total,
         )
     return inserted_total
+
+
+async def replace_document_source(source: str, chunks: list[dict]) -> tuple[int, int]:
+    """Luồng Ingest nguyên tử cho một file: embed TOÀN BỘ chunk trước, chỉ khi thành công mới xóa bản cũ và ghi bản mới trong 1 transaction.
+    Trả về (số chunk cũ đã xóa, số chunk mới đã ghi). Nếu embedding lỗi, dữ liệu cũ của file không bị ảnh hưởng."""
+    if not chunks:
+        return 0, 0
+    # Bước 1: embedding có thể lỗi/timeout -> raise ngay, chưa đụng tới DB
+    vectors = await embed_documents([item["content"] for item in chunks])
+    # Bước 2: xóa + ghi trong cùng một transaction
+    return await replace_source_chunks(source=source, chunks=chunks, embeddings=vectors)
 
 
 async def retrieve_medical_contexts(

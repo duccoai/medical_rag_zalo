@@ -4,12 +4,11 @@ import time
 from pathlib import Path
 from app.db.pgvector_store import (
     close_db_pool,
-    get_db_pool,
     init_vector_db,
 )
 from app.services.ingestion import extract_and_chunk_pdf
 from app.services.rag_engine import (
-    ingest_document_chunks,
+    replace_document_source,
     retrieve_medical_contexts,
 )
 
@@ -21,15 +20,6 @@ def normalize_vietnamese_pdf_artifacts(text: str) -> str:
     return text.replace("ƣ", "ư").replace("Ƣ", "Ư")
 
 
-async def delete_existing_source(source_name: str) -> int:
-    """Xóa các vector cũ của cùng file PDF để chạy lại script không bị trùng dữ liệu"""
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM medical_documents WHERE metadata->>'source' = $1;",
-            source_name,
-        )
-        return int(result.split()[-1])
 
 
 async def run_ingestion_pipeline(default_category: str = "tu_van_nha_thuoc") -> None:
@@ -68,15 +58,14 @@ async def run_ingestion_pipeline(default_category: str = "tu_van_nha_thuoc") -> 
                         for k, v in item["metadata"]["headers"].items()
                     }
 
-            deleted = await delete_existing_source(pdf_path.name)
-            if deleted > 0:
-                print(f"   🧹 Đã dọn {deleted} chunks cũ của file này.")
-
             print(f"   ⏳ Đang tạo Embedding 768d cho {len(chunks)} chunks...")
-            inserted = await ingest_document_chunks(chunks)
+            # Embed trước, sau đó xóa bản cũ và ghi bản mới trong 1 transaction (lỗi giữa chừng thì giữ nguyên dữ liệu cũ)
+            deleted, inserted = await replace_document_source(pdf_path.name, chunks)
             elapsed = round(time.perf_counter() - file_start, 2)
             total_inserted += inserted
 
+            if deleted > 0:
+                print(f"   🧹 Đã thay thế {deleted} chunks cũ của file này.")
             print(f"   ✅ Hoàn tất nạp {inserted} vectors vào pgvector ({elapsed}s)\n")
 
         total_time = round(time.perf_counter() - pipeline_start, 2)
