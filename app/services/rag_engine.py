@@ -2,6 +2,7 @@ import logging
 import math
 import asyncio
 import time
+import unicodedata
 
 import httpx
 import httpx2
@@ -43,7 +44,10 @@ FALLBACK_STATUS_CODES = {429, 503, 504}
 SYSTEM_INSTRUCTION = (
     "Bạn là Trợ lý Y tế Thông minh. Chỉ sử dụng thông tin trong tài liệu Context được cung cấp để tư vấn.\n"
     "Tuyệt đối không tự suy đoán hoặc bịa đặt liều dùng thuốc ngoài tài liệu. "
-    "Nếu Context không chứa thông tin liên quan đến câu hỏi, hãy lịch sự từ chối trả lời và khuyên người dùng hỏi bác sĩ."
+    "Nếu Context không chứa thông tin liên quan đến câu hỏi, hãy lịch sự từ chối trả lời và khuyên người dùng hỏi bác sĩ.\n"
+    "Trường sources: chỉ được điền đúng tên nguồn ghi sau 'Nguồn:' trong các đoạn Context bạn đã dùng để trả lời. "
+    "Tuyệt đối không tự đặt, rút gọn hay suy diễn tên tài liệu, số trang hoặc mục không xuất hiện trong Context. "
+    "Nếu không dùng đoạn Context nào, để sources là danh sách rỗng."
 )
 
 EMERGENCY_KEYWORDS = [
@@ -137,7 +141,11 @@ async def retrieve_medical_contexts(
 # Hàm điều phối chính: ghép context vào prompt và trả về câu trả lời đúng cấu trúc MedicalResponseSchema.
 # Nếu model hiện tại trả về 503/504, tự động thử model dự phòng tiếp theo trong LLM_MODELS.
 async def generate_medical_answer(
-    query: str, retrieved_contexts: list[str]) -> MedicalResponseSchema:
+    query: str,
+    retrieved_contexts: list[str],
+    source_index: dict[str, str] | None = None,
+) -> MedicalResponseSchema:
+    """source_index: map từ khóa chuẩn hóa -> trích dẫn chuẩn (sinh từ metadata). Dùng để kiểm chứng sources của LLM."""
 
     emergency_response = check_input_guardrail(query)
     if emergency_response:
@@ -153,7 +161,11 @@ async def generate_medical_answer(
     last_error: Exception | None = None
     for index, model in enumerate(LLM_MODELS):
         try:
-            return await _call_gemini(model, full_prompt)
+            result = await _call_gemini(model, full_prompt)
+            # Không tin sources do LLM sinh: chỉ giữ những nguồn khớp với tài liệu đã truy xuất
+            return result.model_copy(
+                update={"sources": _verify_sources(result.sources, source_index or {})}
+            )
 
         except errors.APIError as e:
             logger.error(
@@ -210,23 +222,55 @@ async def generate_medical_answer(
         "Dịch vụ tư vấn AI tạm thời quá tải hoặc hết thời gian phản hồi, vui lòng thử lại sau ít phút."
     ) from last_error
 
+def _build_citation(meta: dict) -> str:
+    """Tạo trích dẫn chuẩn từ metadata: tên nguồn + tiêu đề phân cấp hoặc số trang nếu có"""
+    source = meta.get("source", "Tài liệu y khoa")
+    headers = meta.get("headers")
+
+    # Ghép chuỗi phân cấp tiêu đề (h1 > h2...) nếu có, không thì fallback sang số trang hoặc tên nguồn
+    if isinstance(headers, dict) and headers:
+        section = " > ".join(str(v) for v in headers.values() if v)
+        return f"{source} ({section})" if section else source
+    if meta.get("page"):
+        return f"{source} (Trang {meta['page']})"
+    return source
+
+
+def _normalize_source_key(value: str) -> str:
+    """Chuẩn hóa để so khớp nguồn: Unicode NFC, không phân biệt hoa thường, gộp khoảng trắng"""
+    return " ".join(unicodedata.normalize("NFC", value).casefold().split())
+
+
+def _build_source_index(matches: list[dict]) -> dict[str, str]:
+    """Lập bảng tra cứu từ tên nguồn và trích dẫn đầy đủ -> trích dẫn chuẩn lấy từ metadata đã truy xuất"""
+    index: dict[str, str] = {}
+    for item in matches:
+        meta = item.get("metadata") or {}
+        citation = _build_citation(meta)
+        index.setdefault(_normalize_source_key(citation), citation)
+        source = meta.get("source")
+        if source:
+            index.setdefault(_normalize_source_key(str(source)), citation)
+    return index
+
+
+def _verify_sources(llm_sources: list[str], source_index: dict[str, str]) -> list[str]:
+    """Chỉ giữ các nguồn LLM trả về khớp với nguồn đã truy xuất; loại trùng, giữ thứ tự. Không khớp thì trả về rỗng."""
+    verified: list[str] = []
+    for raw in llm_sources:
+        canonical = source_index.get(_normalize_source_key(raw))
+        if canonical and canonical not in verified:
+            verified.append(canonical)
+    return verified
+
+
 # Hàm chuyển danh sách kết quả từ pgvector thành các khối text có ghi rõ nguồn & tiêu đề để LLM trích dẫn chuẩn
 def _format_retrieved_contexts(matches: list[dict]) -> list[str]:
     """Định dạng kết quả từ pgvector kèm metadata nguồn rõ ràng để LLM trích dẫn chính xác"""
     formatted_contexts: list[str] = []
     for idx, item in enumerate(matches, start=1):
         meta = item.get("metadata") or {}
-        source = meta.get("source", "Tài liệu y khoa")
-        headers = meta.get("headers")
-
-        # Ghép chuỗi phân cấp tiêu đề (h1 > h2...) nếu có, không thì fallback sang số trang hoặc tên nguồn
-        if isinstance(headers, dict) and headers:
-            section = " > ".join(str(v) for v in headers.values() if v)
-            citation = f"{source} ({section})" if section else source
-        elif meta.get("page"):
-            citation = f"{source} (Trang {meta['page']})"
-        else:
-            citation = source
+        citation = _build_citation(meta)
 
         formatted_contexts.append(
             f"[Tài liệu {idx} | Nguồn: {citation} | Độ tương đồng: {item['similarity']}]\n"
@@ -274,4 +318,5 @@ async def answer_medical_query(
     return await generate_medical_answer(
         query=query,
         retrieved_contexts=formatted_contexts,
+        source_index=_build_source_index(matches),
     )
