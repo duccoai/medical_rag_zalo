@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import time
 
+from app.db.redis_cache import close_redis, init_redis
 from api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import (
@@ -16,9 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 async def lifespan(app: FastAPI):
     # Khởi tạo extension & pool kết nối pgvector khi server khởi động
     await init_vector_db()
+    await init_redis()
     yield
     # Đóng pool kết nối sạch sẽ khi server tắt
     await close_db_pool()
+    await close_redis()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
