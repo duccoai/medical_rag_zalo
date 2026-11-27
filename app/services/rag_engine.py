@@ -166,6 +166,7 @@ async def generate_medical_answer(
     retrieved_contexts: list[str],
     source_index: dict[str, str] | None = None,
     deadline: float | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> MedicalResponseSchema:
     """source_index: map từ khóa chuẩn hóa -> trích dẫn chuẩn (sinh từ metadata). Dùng để kiểm chứng sources của LLM.
     deadline: thời điểm kết thúc tổng (time.monotonic). Mỗi model chỉ được dùng tối đa phần thời gian còn lại."""
@@ -180,6 +181,7 @@ async def generate_medical_answer(
     context_str = "\n---\n".join(retrieved_contexts)
     # Chỉ ghép Context và câu hỏi; chỉ dẫn vai trò đã nằm trong SYSTEM_INSTRUCTION
     full_prompt = (
+        f"{_format_history(history)}"
         f"Context:\n{context_str}\n\n"
         f"Câu hỏi của người dùng: {query}"
     )
@@ -299,6 +301,20 @@ def _verify_sources(llm_sources: list[str], source_index: dict[str, str]) -> lis
             verified.append(canonical)
     return verified
 
+def _format_history(history: list[dict[str, str]] | None) -> str:
+    """Chỉ dùng để hiểu câu hỏi nối tiếp. Không phải nguồn trích dẫn."""
+    if not history:
+        return ""
+    lines = [
+        f"{'Người dùng' if turn['role'] == 'user' else 'Trợ lý'}: {turn['content']}"
+        for turn in history
+    ]
+    return (
+        "Lịch sử hội thoại gần đây (chỉ để hiểu ngữ cảnh, KHÔNG dùng làm nguồn trích dẫn):\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
 
 # Hàm chuyển danh sách kết quả từ pgvector thành các khối text có ghi rõ nguồn & tiêu đề để LLM trích dẫn chuẩn
 def _format_retrieved_contexts(matches: list[dict]) -> list[str]:
@@ -321,6 +337,7 @@ async def answer_medical_query(
     top_k: int = 3,
     similarity_threshold: float = 0.5,
     category_filter: str | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> MedicalResponseSchema:
     """Pipeline RAG hoàn chỉnh: Guardrail -> Retrieve pgvector -> Format Context -> Generate LLM.
     Toàn bộ pipeline (trừ guardrail) nằm trong deadline tổng settings.ANSWER_TOTAL_TIMEOUT."""
@@ -360,4 +377,5 @@ async def answer_medical_query(
         retrieved_contexts=formatted_contexts,
         source_index=_build_source_index(matches),
         deadline=deadline,
+        history=history,
     )
