@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     ZALO_APP_SECRET: SecretStr | None = Field(default=None, description="Zalo App Secret (Optional until Zalo module is implemented)")
     ZALO_OA_ACCESS_TOKEN: SecretStr | None = Field(default=None, description="Zalo OA Access Token (Optional until Zalo module is implemented)")
 
+    # Redis Configuration
+    REDIS_URL: str = 'redis://localhost:6379/0'
+    REDIS_KEY_PREFIX: str = "medrag"           # Tiền tố mọi khóa, tránh đụng khóa của dự án khác
+    REDIS_SOCKET_TIMEOUT: float = 2.0          # Timeout kết nối và thao tác Redis (giây)
+    REDIS_MEMORY_MAX_TURNS: int = 5            # Số lượt hỏi-đáp giữ lại cho mỗi user
+    REDIS_MEMORY_MAX_CHARS: int = 500          # Cắt mỗi nội dung lịch sử để không phình prompt
+    REDIS_MEMORY_TTL_SECONDS: int = 86400      # Hội thoại hết hạn sau 24 giờ không hoạt động
+    REDIS_CACHE_TTL_SECONDS: int = 3600        # Cache câu trả lời sống 1 giờ
+
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:
