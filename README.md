@@ -206,7 +206,7 @@ ZALO_OA_ACCESS_TOKEN="your-zalo-oa-access-token"
 POSTGRES_SERVER="localhost"
 POSTGRES_PORT=5432
 POSTGRES_USER="postgres"
-POSTGRES_PASSWORD="medicaloai11911"
+POSTGRES_PASSWORD="your-postgres-password"
 POSTGRES_DB="medical_db"
 
 # --- Cấu Hình Redis Cache ---

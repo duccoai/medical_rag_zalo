@@ -1,4 +1,6 @@
+from contextlib import asynccontextmanager
 import time
+
 from api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import (
@@ -6,13 +8,23 @@ from app.core.exceptions import (
     app_exception_handler,
     unhandled_exception_handler,
 )
+from app.db.pgvector_store import close_db_pool, init_vector_db
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Khởi tạo extension & pool kết nối pgvector khi server khởi động
+    await init_vector_db()
+    yield
+    # Đóng pool kết nối sạch sẽ khi server tắt
+    await close_db_pool()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Backend API cho hệ thống Trợ lý Tư vấn Y tế & Thường thức Sức khỏe",
+    lifespan=lifespan,
 )
 
 # 1. Cấu hình CORS

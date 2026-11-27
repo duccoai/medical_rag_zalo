@@ -91,6 +91,30 @@ async def init_vector_db() -> None:
 
 
 # TẦNG 4 - GHI / UPSERT DỮ LIỆU VECTOR VÀO DB (LUỒNG NẠP OFFLINE)
+_UPSERT_CHUNK_SQL = """
+    INSERT INTO medical_documents (content, metadata, embedding, chunk_key)
+    VALUES ($1, $2::jsonb, $3, $4)
+    ON CONFLICT (chunk_key) DO UPDATE SET
+        content = EXCLUDED.content,
+        metadata = EXCLUDED.metadata,
+        embedding = EXCLUDED.embedding
+"""
+
+
+# Gom chunk + vector thành bản ghi đúng thứ tự cột của câu upsert
+def _build_chunk_records(chunks: list[dict], embeddings: list[list[float]]) -> list[tuple]:
+    """Chuyển chunks và vectors thành list tuple (content, metadata, embedding, chunk_key)"""
+    return [
+        (
+            item["content"],
+            json.dumps(item["metadata"], ensure_ascii=False),
+            emb,  # Truyền trực tiếp list[float] nhờ đã register_vector ở init_conn
+            f"{item['metadata']['source']}:{item['metadata']['chunk_index']}",
+        )
+        for item, emb in zip(chunks, embeddings)
+    ]
+
+
 # Hàm nhận sẵn danh sách chunks và vector đã tính từ bên ngoài, chia lô ghi hàng loạt và upsert theo chunk_key
 async def insert_chunks_with_embeddings(
     chunks: list[dict],
@@ -115,32 +139,55 @@ async def insert_chunks_with_embeddings(
         chunk_slice = chunks[i : i + db_batch_size]
         emb_slice = embeddings[i : i + db_batch_size]
 
-        records = [
-            (
-                item["content"],
-                json.dumps(item["metadata"], ensure_ascii=False),
-                emb,  # Truyền trực tiếp list[float] nhờ đã register_vector ở init_conn
-                f"{item['metadata']['source']}:{item['metadata']['chunk_index']}",
-            )
-            for item, emb in zip(chunk_slice, emb_slice)
-        ]
+        records = _build_chunk_records(chunk_slice, emb_slice)
 
         # Mượn 1 kết nối từ pool và thực thi upsert: trùng chunk_key thì cập nhật lại nội dung/metadata/vector
         async with pool.acquire() as conn:
-            await conn.executemany(
-                """
-                INSERT INTO medical_documents (content, metadata, embedding, chunk_key)
-                VALUES ($1, $2::jsonb, $3, $4)
-                ON CONFLICT (chunk_key) DO UPDATE SET
-                    content = EXCLUDED.content,
-                    metadata = EXCLUDED.metadata,
-                    embedding = EXCLUDED.embedding
-                """,
-                records,
-            )
+            await conn.executemany(_UPSERT_CHUNK_SQL, records)
         inserted_count += len(records)
 
     return inserted_count
+
+
+# Hàm thay thế toàn bộ chunks của MỘT nguồn (file PDF) theo kiểu nguyên tử: xóa bản cũ + ghi bản mới trong cùng transaction
+async def replace_source_chunks(
+    source: str,
+    chunks: list[dict],
+    embeddings: list[list[float]],
+    db_batch_size: int = 200,
+) -> tuple[int, int]:
+    """Trả về (số chunk cũ đã xóa, số chunk mới đã ghi). Nếu bất kỳ bước nào lỗi, transaction rollback và dữ liệu cũ được giữ nguyên."""
+    if not chunks:
+        # Không có chunk hợp lệ thì không đụng vào dữ liệu cũ của nguồn này
+        return 0, 0
+    if len(chunks) != len(embeddings):
+        raise AppBaseException(
+            message=f"Số lượng chunks ({len(chunks)}) không khớp số lượng vectors ({len(embeddings)}).",
+            status_code=400,
+        )
+    # Chặn ghi nhầm chunk của nguồn khác vào phạm vi xóa của nguồn hiện tại
+    if any(item["metadata"].get("source") != source for item in chunks):
+        raise AppBaseException(
+            message=f"Có chunk không thuộc nguồn '{source}', từ chối thay thế dữ liệu.",
+            status_code=400,
+        )
+
+    # Chuẩn bị toàn bộ bản ghi trước khi mở transaction để lỗi dữ liệu xảy ra sớm, không ảnh hưởng DB
+    records = _build_chunk_records(chunks, embeddings)
+    pool = await get_db_pool()
+
+    async with pool.acquire() as conn:
+        # Xóa và ghi cùng một connection, cùng một transaction: hoặc thành công toàn bộ, hoặc không thay đổi gì
+        async with conn.transaction():
+            delete_status = await conn.execute(
+                "DELETE FROM medical_documents WHERE metadata->>'source' = $1;",
+                source,
+            )
+            for i in range(0, len(records), db_batch_size):
+                await conn.executemany(_UPSERT_CHUNK_SQL, records[i : i + db_batch_size])
+
+    deleted_count = int(delete_status.split()[-1])
+    return deleted_count, len(records)
 
 
 # TẦNG 5 - TÌM KIẾM TƯƠNG ĐỒNG VECTOR (LUỒNG TRUY VẤN ONLINE)
