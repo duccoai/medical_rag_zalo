@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "medicaloai11911"
+    POSTGRES_PASSWORD: str = Field(..., description="PostgreSQL password (required)")
     POSTGRES_DB: str = "medical_db"
 
     # Zalo OA (Optional until Zalo module is implemented)
