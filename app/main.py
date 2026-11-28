@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import time
 
+
 from app.db.redis_cache import close_redis, init_redis
 from api.v1.router import api_router
 from app.core.config import settings
@@ -13,6 +14,8 @@ from app.db.pgvector_store import close_db_pool, init_vector_db
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.services.zalo_service import close_zalo_client
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Khởi tạo extension & pool kết nối pgvector khi server khởi động
@@ -20,6 +23,7 @@ async def lifespan(app: FastAPI):
     await init_redis()
     yield
     # Đóng pool kết nối sạch sẽ khi server tắt
+    await close_zalo_client()
     await close_db_pool()
     await close_redis()
 
