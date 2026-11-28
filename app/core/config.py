@@ -25,9 +25,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = Field(..., description="PostgreSQL password (required)")
     POSTGRES_DB: str = "medical_db"
 
-    # Zalo OA (Optional until Zalo module is implemented)
-    ZALO_APP_SECRET: SecretStr | None = Field(default=None, description="Zalo App Secret (Optional until Zalo module is implemented)")
-    ZALO_OA_ACCESS_TOKEN: SecretStr | None = Field(default=None, description="Zalo OA Access Token (Optional until Zalo module is implemented)")
+
 
     # Redis Configuration
     REDIS_URL: str = 'redis://localhost:6379/0'
@@ -37,6 +35,21 @@ class Settings(BaseSettings):
     REDIS_MEMORY_MAX_CHARS: int = 500          # Cắt mỗi nội dung lịch sử để không phình prompt
     REDIS_MEMORY_TTL_SECONDS: int = 86400      # Hội thoại hết hạn sau 24 giờ không hoạt động
     REDIS_CACHE_TTL_SECONDS: int = 3600        # Cache câu trả lời sống 1 giờ
+
+    # Zalo OA
+    ZALO_APP_ID: str | None = Field(default=None, description="App ID trên Zalo for Developers")
+    ZALO_APP_SECRET: SecretStr | None = Field(default=None, description="App Secret, dùng để refresh token và xác minh chữ ký webhook [XÁC MINH]")
+    ZALO_OA_SECRET_KEY: SecretStr | None = Field(default=None, description="Secret key của OA, dùng xác minh chữ ký webhook [XÁC MINH]")
+    ZALO_OA_ACCESS_TOKEN: SecretStr | None = Field(default=None, description="Access token ban đầu của OA, chỉ dùng để bootstrap")
+    ZALO_OA_REFRESH_TOKEN: SecretStr | None = Field(default=None, description="Refresh token ban đầu của OA, chỉ dùng để bootstrap")
+    ZALO_API_BASE_URL: str = "https://openapi.zalo.me"      # [XÁC MINH] phiên bản API gửi tin
+    ZALO_OAUTH_BASE_URL: str = "https://oauth.zaloapp.com"  # [XÁC MINH] endpoint refresh token
+    ZALO_REQUEST_TIMEOUT: float = 5.0                       # Timeout mỗi lệnh gọi Zalo OpenAPI (giây)
+    ZALO_REPLY_MAX_CHARS: int = 2000                        # Độ dài tối đa mỗi tin nhắn gửi đi [XÁC MINH]
+    ZALO_EVENT_DEDUP_TTL_SECONDS: int = 3600                # Thời gian nhớ msg_id đã xử lý
+    ZALO_TOKEN_REFRESH_LEEWAY_SECONDS: int = 300            # Làm mới trước khi token hết hạn 5 phút
+    ZALO_WEBHOOK_SIGNATURE_MAX_AGE_SECONDS: int = 300       # Chống replay theo timestamp sự kiện [XÁC MINH]
+
 
 
     @computed_field
@@ -49,3 +62,5 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()
+
+    
